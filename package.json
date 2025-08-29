@@ -1,0 +1,34 @@
+{
+  "name": "universal-nft-cross-chain",
+  "version": "1.0.0",
+  "description": "Universal NFT implementation with cross-chain support for ZetaChain, EVM, and Solana",
+  "private": true,
+  "workspaces": [
+    "contracts/zetachain/universal-nft",
+    "contracts/evm-connected/universal-nft",
+    "gateway-wiring",
+    "sdk",
+    "apps/demo"
+  ],
+  "scripts": {
+    "setup": "./scripts/setup-localnet.sh",
+    "deploy": "./scripts/deploy-all.sh",
+    "test": "yarn test:contracts && yarn test:programs && yarn test:e2e",
+    "test:contracts": "cd contracts/zetachain/universal-nft && yarn test && cd ../../../contracts/evm-connected/universal-nft && yarn test",
+    "test:programs": "cd programs/solana-universal-nft && anchor test",
+    "test:e2e": "cd test && yarn test",
+    "lint": "yarn workspaces run lint",
+    "build": "yarn workspaces run build",
+    "clean": "yarn workspaces run clean"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "prettier": "^3.0.0",
+    "eslint": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "yarn": ">=1.22.0"
+  }
+}

@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  zetachain-localnet:
+    image: zetachain/localnet:latest
+    ports:
+      - "8545:8545"   # ZetaChain EVM RPC
+      - "8546:8546"   # Connected EVM RPC  
+      - "26657:26657" # ZetaChain Tendermint RPC
+      - "1317:1317"   # ZetaChain REST API
+    volumes:
+      - ./infra/localnet-data:/data
+    command: ["start", "--chains", "evm,solana"]
+    environment:
+      - SOLANA_ENABLED=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  solana-test-validator:
+    image: solanalabs/solana:stable
+    ports:
+      - "8899:8899"   # Solana RPC
+      - "8900:8900"   # Solana faucet
+    command: [
+      "solana-test-validator",
+      "--rpc-port", "8899", 
+      "--faucet-port", "8900",
+      "--reset",
+      "--quiet"
+    ]
+    volumes:
+      - ./infra/solana-data:/data
+    healthcheck:
+      test: ["CMD", "solana", "cluster-version", "--url", "http://localhost:8899"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  ipfs:
+    image: ipfs/go-ipfs:latest
+    ports:
+      - "4001:4001"   # P2P
+      - "5001:5001"   # API  
+      - "8080:8080"   # Gateway
+    volumes:
+      - ./infra/ipfs-data:/data/ipfs
+    environment:
+      - IPFS_PROFILE=server

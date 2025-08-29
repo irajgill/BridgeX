@@ -1,0 +1,253 @@
+name: Universal NFT CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  SOLANA_VERSION: 1.16.0
+  ANCHOR_VERSION: 0.29.0
+
+jobs:
+  test-contracts:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Lint Solidity contracts
+      run: |
+        cd contracts/zetachain/universal-nft
+        yarn lint
+        cd ../../evm-connected/universal-nft
+        yarn lint
+
+    - name: Test ZetaChain Universal NFT
+      run: |
+        cd contracts/zetachain/universal-nft
+        yarn test
+
+    - name: Test EVM Connected NFT
+      run: |
+        cd contracts/evm-connected/universal-nft
+        yarn test
+
+  test-solana:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+
+    - name: Cache Solana Tool Suite
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/solana/
+          ~/.local/share/solana/
+        key: solana-${{ env.SOLANA_VERSION }}
+
+    - name: Install Solana
+      run: |
+        sh -c "$(curl -sSfL https://release.solana.com/v${{ env.SOLANA_VERSION }}/install)"
+        echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+    - name: Cache Anchor
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/anchor
+        key: anchor-${{ env.ANCHOR_VERSION }}
+
+    - name: Install Anchor CLI
+      run: |
+        cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked --tag v${{ env.ANCHOR_VERSION }}
+
+    - name: Test Solana Program
+      run: |
+        cd programs/solana-universal-nft
+        anchor test
+
+  test-sdk:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Test SDK
+      run: |
+        cd sdk
+        yarn test
+
+    - name: Test Gateway Wiring
+      run: |
+        cd gateway-wiring
+        yarn test
+
+  test-e2e:
+    runs-on: ubuntu-latest
+    needs: [test-contracts, test-solana, test-sdk]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Setup localnet
+      run: |
+        ./scripts/setup-localnet.sh
+
+    - name: Run E2E tests
+      run: |
+        cd test
+        yarn test:e2e
+
+    - name: Cleanup
+      if: always()
+      run: |
+        docker-compose down -v
+
+  security-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Run Slither analysis
+      uses: crytic/slither-action@v0.3.0
+      with:
+        target: 'contracts/'
+
+    - name: Run npm audit
+      run: yarn audit --audit-level moderate
+
+  build-demo:
+    runs-on: ubuntu-latest
+    needs: [test-contracts, test-solana, test-sdk]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Build Demo App
+      run: |
+        cd apps/demo
+        yarn build
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: demo-build
+        path: apps/demo/out/
+
+  deploy-testnet:
+    runs-on: ubuntu-latest
+    needs: [test-e2e, security-audit]
+    if: github.ref == 'refs/heads/develop'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Deploy to testnet
+      env:
+        ZETACHAIN_PRIVATE_KEY: ${{ secrets.TESTNET_PRIVATE_KEY }}
+        SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+        SOLANA_PRIVATE_KEY: ${{ secrets.SOLANA_PRIVATE_KEY }}
+      run: |
+        NODE_ENV=testnet ./scripts/deploy-testnet.sh
+
+    - name: Update deployment status
+      run: |
+        echo "Testnet deployment completed"
+        # Could integrate with deployment tracking services
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [deploy-testnet]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Create Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.run_number }}
+        release_name: Universal NFT Release ${{ github.run_number }}
+        body: |
+          ## Changes
+          ${{ github.event.head_commit.message }}
+
+          ## Deployment
+          - ZetaChain: Testnet contracts deployed and verified
+          - EVM Chains: Connected contracts deployed on Sepolia, Base
+          - Solana: Program deployed on Devnet
+
+          ## Testing
+          - All unit tests passing
+          - Cross-chain integration tests completed
+          - Security audit clean
+        draft: false
+        prerelease: false
